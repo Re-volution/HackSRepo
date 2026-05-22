@@ -1,53 +1,182 @@
 /*
- * 项目二：记录收集器（修正版）
- * 功能：通过 MAC 地址连接围栏桩子，下载记录
+ * 项目二：记录收集器（双角色版 - ArduinoBLE 兼容）
+ * 功能：
+ *   1. 主动连接桩子下载数据（BLE客户端）
+ *   2. 接受手机连接，响应 getdata 命令（BLE服务器）
+ *   3. OLED 显示进度和数据
  */
 
 #include <ArduinoBLE.h>
- 
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// ========== OLED 配置 ==========
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_ADDR 0x3C
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
 // ========== 桩子信息列表 ==========
 struct FenceInfo {
   const char* name;
   const char* mac;
 };
 
-// 请将每个桩子的 MAC 地址填入这里（从桩子串口输出获取）
 FenceInfo fences[] = {
-  {"FENCE_001", "e8:3d:c1:90:5f:fa"},   // 替换为实际 MAC
-  // 新增桩子只需在这里添加
+  {"FENCE_001", "e8:3d:c1:90:5f:fa"},
 };
 
 const int fenceCount = sizeof(fences) / sizeof(fences[0]);
 
-// ========== BLE 服务 UUID（需与桩子一致）==========
-const char* serviceUuid = "19B10000-E8F2-537E-4F6C-D104768A1214";
-const char* dataCharUuid = "19B10002-E8F2-537E-4F6C-D104768A1216";
+// ========== 桩子 BLE 服务 UUID ==========
+const char* fenceServiceUuid = "19B10000-E8F2-537E-4F6C-D104768A1214";
+const char* fenceDataCharUuid = "19B10002-E8F2-537E-4F6C-D104768A1216";
+
+// ========== 收集设备的 BLE 服务（供手机连接）==========
+const char* collectorServiceUuid = "19B20000-E8F2-537E-4F6C-D104768A1214";
+const char* collectorCommandCharUuid = "19B20001-E8F2-537E-4F6C-D104768A1215";
+const char* collectorDataCharUuid = "19B20002-E8F2-537E-4F6C-D104768A1216";
+
+BLEService collectorService(collectorServiceUuid);
+BLEStringCharacteristic commandCharacteristic(collectorCommandCharUuid, BLERead | BLEWrite, 32);
+BLEStringCharacteristic dataCharacteristic(collectorDataCharUuid, BLERead | BLEWrite, 2048);
+
+// ========== 存储收集到的所有数据 ==========
+String allData = "";
+String currentFenceData = "";
 
 const int ledPin = 8;
+bool deviceConnected = false;
 
-// ========== 从指定桩子下载数据 ==========
-bool downloadFromFence(const char* fenceName, const char* fenceMac) {
-  Serial.print("连接桩子: ");
-  Serial.print(fenceName);
-  Serial.print(" (");
-  Serial.print(fenceMac);
-  Serial.println(")");
+// ========== OLED 显示函数 ==========
+void showStartup() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(20, 20);
+  display.println("Record Collector");
+  display.setCursor(30, 40);
+  display.print("Fences: ");
+  display.println(fenceCount);
+  display.display();
+  delay(2000);
+}
+
+void showScanning(int fenceIndex, int total) {
+  display.clearDisplay();
+  display.setCursor(0, 10);
+  display.print("Scanning [");
+  display.print(fenceIndex + 1);
+  display.print("/");
+  display.print(total);
+  display.println("]");
+  display.setCursor(0, 30);
+  display.print("Target: ");
+  display.println(fences[fenceIndex].name);
+  display.setCursor(0, 50);
+  display.println("Please wait...");
+  display.display();
+}
+
+void showConnecting(int fenceIndex, int total) {
+  display.clearDisplay();
+  display.setCursor(0, 10);
+  display.print("Connecting [");
+  display.print(fenceIndex + 1);
+  display.print("/");
+  display.print(total);
+  display.println("]");
+  display.setCursor(0, 30);
+  display.print("Target: ");
+  display.println(fences[fenceIndex].name);
+  display.setCursor(0, 50);
+  display.println("Connecting...");
+  display.display();
+}
+
+void showProgress(int current, int total) {
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.print("Downloading...");
+  display.setCursor(0, 20);
+  display.print("Progress: ");
+  display.print(current);
+  display.print("/");
+  display.println(total);
+  int barWidth = map(current, 0, total, 0, 120);
+  display.drawRect(0, 40, 128, 10, SSD1306_WHITE);
+  display.fillRect(0, 40, barWidth, 10, SSD1306_WHITE);
+  display.display();
+}
+
+void showError(const char* msg) {
+  display.clearDisplay();
+  display.setCursor(0, 20);
+  display.println("ERROR!");
+  display.setCursor(0, 40);
+  display.println(msg);
+  display.display();
+  delay(2000);
+}
+
+void showCollectorReady() {
+  display.clearDisplay();
+  display.setCursor(0, 10);
+  display.println("Collector Ready");
+  display.setCursor(0, 30);
+  display.print("Data size: ");
+  display.print(allData.length());
+  display.println(" bytes");
+  display.setCursor(0, 50);
+  display.println("Connect phone ->");
+  display.display();
+}
+
+void showPhoneConnected() {
+  display.clearDisplay();
+  display.setCursor(0, 25);
+  display.println("Phone Connected");
+  display.setCursor(0, 45);
+  display.println("Send 'getdata'");
+  display.display();
+}
+
+// ========== 设置收集设备的 BLE 服务 ==========
+void setupCollectorService() {
+  BLE.setLocalName("DataCollector");
+  BLE.setAdvertisedService(collectorService);
   
-  // 1. 扫描找到指定 MAC 的设备
+  collectorService.addCharacteristic(commandCharacteristic);
+  collectorService.addCharacteristic(dataCharacteristic);
+  BLE.addService(collectorService);
+  
+  commandCharacteristic.writeValue("ready");
+  dataCharacteristic.writeValue("");
+  
+  BLE.advertise();
+  Serial.println("收集设备 BLE 服务已启动");
+}
+
+// ========== 从桩子下载数据 ==========
+bool downloadFromFence(int fenceIndex, int total) {
+  const char* fenceName = fences[fenceIndex].name;
+  const char* fenceMac = fences[fenceIndex].mac;
+  
+  showScanning(fenceIndex, total);
+  
+  // 扫描指定 MAC 的设备
   BLE.scan();
   BLEDevice device;
   bool found = false;
   unsigned long startTime = millis();
   
-  Serial.println("扫描中...");
-  while (millis() - startTime < 5000) {  // 扫描5秒
+  while (millis() - startTime < 5000) {
     device = BLE.available();
     if (device) {
       String addr = device.address();
       if (addr.equalsIgnoreCase(fenceMac)) {
         found = true;
-        Serial.print("找到设备: ");
-        Serial.println(addr);
         break;
       }
     }
@@ -55,56 +184,85 @@ bool downloadFromFence(const char* fenceName, const char* fenceMac) {
   BLE.stopScan();
   
   if (!found) {
-    Serial.println("未找到桩子设备，请检查 MAC 地址");
+    showError("Device not found");
     return false;
   }
   
-  // 2. 连接设备
+  showConnecting(fenceIndex, total);
+  
   if (!device.connect()) {
-    Serial.println("连接失败");
+    showError("Connect failed");
     return false;
   }
   
-  Serial.println("连接成功");
+  showProgress(30, 100);
   
-  // 3. 发现属性和读取数据
   bool success = false;
   if (device.discoverAttributes()) {
-    BLEService service = device.service(serviceUuid);
+    showProgress(60, 100);
+    
+    BLEService service = device.service(fenceServiceUuid);
     if (service) {
-      BLECharacteristic dataChar = service.characteristic(dataCharUuid);
+      BLECharacteristic dataChar = service.characteristic(fenceDataCharUuid);
       if (dataChar && dataChar.canRead()) {
-        // 读取字符串数据（使用缓冲区）
+        showProgress(90, 100);
+        
+        // 修正点：使用缓冲区读取
         uint8_t buffer[2048];
         int len = dataChar.readValue(buffer, sizeof(buffer));
         String jsonData = "";
         if (len > 0) {
+          buffer[len] = '\0';
           jsonData = String((char*)buffer);
         }
-        Serial.println("=== " + String(fenceName) + " 的记录 ===");
-        Serial.println(jsonData);
-        Serial.println("=========================");
-        success = true;
         
-        // 闪烁 LED 表示成功
-        for (int i = 0; i < 3; i++) {
-          digitalWrite(ledPin, HIGH);
-          delay(100);
-          digitalWrite(ledPin, LOW);
-          delay(100);
+        if (jsonData.length() > 0) {
+          currentFenceData = jsonData;
+          
+          // 添加到总数据中
+          if (allData.length() > 0 && allData != "[") {
+            allData += ",";
+          }
+          allData += currentFenceData;
+          
+          showProgress(100, 100);
+          success = true;
+        } else {
+          showError("Data empty");
         }
       } else {
-        Serial.println("无法读取数据特征值");
+        showError("Cannot read char");
       }
     } else {
-      Serial.println("未找到下载服务");
+      showError("Service not found");
     }
   } else {
-    Serial.println("属性发现失败");
+    showError("Discover failed");
   }
   
   device.disconnect();
   return success;
+}
+
+// ========== 主动下载所有桩子数据 ==========
+void downloadAllFences() {
+  allData = "[";
+  
+  for (int i = 0; i < fenceCount; i++) {
+    downloadFromFence(i, fenceCount);
+    delay(1000);
+  }
+  
+  allData += "]";
+  
+  Serial.println("所有桩子收集完成");
+  Serial.print("总数据: ");
+  Serial.println(allData);
+  
+  // 更新 BLE 特征值，供手机读取
+  dataCharacteristic.writeValue(allData);
+  
+  showCollectorReady();
 }
 
 // ========== 主程序 ==========
@@ -112,7 +270,6 @@ void setup() {
   Serial.begin(115200);
   pinMode(ledPin, OUTPUT);
   
-  // 启动提示
   for (int i = 0; i < 3; i++) {
     digitalWrite(ledPin, HIGH);
     delay(100);
@@ -120,37 +277,61 @@ void setup() {
     delay(100);
   }
   
-  Serial.println("=== 记录收集器启动 ===");
-  Serial.print("共 ");
-  Serial.print(fenceCount);
-  Serial.println(" 个桩子待收集");
+  // 初始化 OLED
+  Wire.begin(4, 5);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    Serial.println("OLED 初始化失败");
+  }
   
+  showStartup();
+  
+  // 初始化 BLE
   if (!BLE.begin()) {
-    Serial.println("BLE 初始化失败");
+    showError("BLE init fail");
     while (1);
   }
   
-  Serial.println("BLE 初始化成功");
+  // 设置收集设备的 BLE 服务器
+  setupCollectorService();
+  
+  // 主动下载所有桩子数据
+  downloadAllFences();
+  
+  Serial.println("=== 收集设备就绪，等待手机连接 ===");
 }
 
 void loop() {
-  Serial.println("\n开始收集...");
+  // 检查手机是否连接
+  BLEDevice central = BLE.central();
   
-  for (int i = 0; i < fenceCount; i++) {
-    downloadFromFence(fences[i].name, fences[i].mac);
-    delay(1000);  // 桩子之间的间隔
-  }
-  
-  Serial.println("\n所有桩子收集完成");
-  Serial.println("等待 5 分钟后再次扫描...\n");
-  
-  // 等待 5 分钟（可调整）
-  for (int i = 0; i < 300; i++) {
-    delay(1000);
-    if (i % 60 == 0) {
-      digitalWrite(ledPin, HIGH);
-      delay(50);
-      digitalWrite(ledPin, LOW);
+  if (central) {
+    if (!deviceConnected) {
+      deviceConnected = true;
+      Serial.println("手机已连接");
+      showPhoneConnected();
     }
+    
+    // 在连接期间处理指令
+    while (central.connected()) {
+      // 检查是否有写入的特征值
+      if (commandCharacteristic.written()) {
+        String command = commandCharacteristic.value();
+        Serial.print("收到指令: ");
+        Serial.println(command);
+        
+        if (command == "getdata") {
+          Serial.println("准备发送数据...");
+          dataCharacteristic.writeValue(allData);
+          Serial.println("数据发送完成");
+        }
+      }
+      delay(100);
+    }
+    
+    deviceConnected = false;
+    Serial.println("手机已断开");
+    showCollectorReady();
   }
+  
+  delay(100);
 }

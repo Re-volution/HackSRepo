@@ -16,11 +16,8 @@ const char* FENCE_ID = "FENCE_001";
 
 // ========== 钥匙扣配置（前缀匹配）==========
 const char* KEYFOB_PREFIX = "KEYFOB_";
-const unsigned long COOLDOWN_SECONDS = 10;
+const unsigned long COOLDOWN_SECONDS = 25;
 
-// ========== 功耗优化参数 ==========
-const unsigned long SCAN_DURATION_MS = 200;
-const unsigned long SCAN_INTERVAL_MS = 1000;
 
 // ========== EEPROM 配置 ==========
 #define EEPROM_SIZE 8192
@@ -171,14 +168,18 @@ void setupBLEService() {
 
 // ========== 扫描钥匙扣 ==========
 void scanKeyfobs() {
+
   BLEScan* pBLEScan = BLEDevice::getScan();
+
   pBLEScan->setActiveScan(true);
-  pBLEScan->start(SCAN_DURATION_MS, false);
-  
+
+  pBLEScan->start(1, false);
+
   BLEScanResults foundDevices = pBLEScan->getResults();
   for (int i = 0; i < foundDevices.getCount(); i++) {
     BLEAdvertisedDevice device = foundDevices.getDevice(i);
     String name = device.getName().c_str();
+
     if (name.startsWith(KEYFOB_PREFIX)) {
       digitalWrite(ledPin, HIGH);
       delay(10);
@@ -211,12 +212,16 @@ void setup() {
   Serial.println(FENCE_ID);
   
   EEPROM.begin(EEPROM_SIZE);
+  
   for (int i = 0; i < 300; i++) {
     int addr = i * sizeof(Record);
     EEPROM.get(addr, records[i]);
-    if (records[i].timestamp != 0 && records[i].keyfobId[0] != '\0') {
+    if (records[i].timestamp > 0 && 
+        records[i].timestamp < 1000000000 &&  // 合理的时间范围
+        records[i].keyfobId[0] != '\0') {
       recordCount++;
     } else {
+      // 遇到空记录，停止读取（假设后续都是空的）
       break;
     }
   }
@@ -229,9 +234,7 @@ void setup() {
 }
 
 void loop() {
+
   scanKeyfobs();
-  delay(SCAN_INTERVAL_MS - SCAN_DURATION_MS);
-  
-  // 处理连接（BLE 服务会自动处理）
-  delay(100);
+  delay(500);
 }
