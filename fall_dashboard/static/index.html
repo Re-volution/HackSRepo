@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>掉落报警中控台</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #eee;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* 头部 */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e94560;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            color: #e94560;
+        }
+
+        .header h1 span {
+            color: #eee;
+            font-size: 14px;
+            margin-left: 10px;
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+        }
+
+        .stat-card {
+            background: rgba(255,255,255,0.1);
+            padding: 10px 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-card .number {
+            font-size: 28px;
+            font-weight: bold;
+            color: #e94560;
+        }
+
+        .stat-card .label {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .btn-clear {
+            background: #e94560;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .btn-clear:hover {
+            background: #c73d54;
+            transform: scale(1.02);
+        }
+
+        /* 最新报警卡片 */
+        .latest-alert {
+            background: linear-gradient(135deg, #e94560 0%, #c73d54 100%);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .latest-alert .label {
+            font-size: 12px;
+            opacity: 0.9;
+            letter-spacing: 2px;
+        }
+
+        .latest-alert .content {
+            font-size: 18px;
+            margin-top: 10px;
+        }
+
+        .latest-alert .time {
+            font-size: 14px;
+            margin-top: 10px;
+            opacity: 0.9;
+        }
+
+        .no-alert {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+        }
+
+        /* 历史记录表格 */
+        .history-section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 20px;
+        }
+
+        .history-section h3 {
+            margin-bottom: 15px;
+            color: #e94560;
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        th {
+            background: rgba(233,69,96,0.2);
+            font-weight: 600;
+        }
+
+        tr:hover {
+            background: rgba(255,255,255,0.05);
+        }
+
+        .accel-values {
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        /* 响应式 */
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                gap: 15px;
+            }
+
+            th, td {
+                padding: 8px;
+                font-size: 12px;
+            }
+        }
+
+        /* 自动刷新指示器 */
+        .refresh-indicator {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.7);
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>
+            🚨 掉落报警中控台
+            <span>ESP32-C3 摔倒检测系统</span>
+        </h1>
+        <div class="stats">
+            <div class="stat-card">
+                <div class="number" id="totalCount">0</div>
+                <div class="label">总报警数</div>
+            </div>
+            <button class="btn-clear" id="clearBtn">清空所有</button>
+        </div>
+    </div>
+
+    <!-- 最新报警 -->
+    <div id="latestContainer"></div>
+
+    <!-- 历史记录 -->
+    <div class="history-section">
+        <h3>📋 历史报警记录</h3>
+        <div class="table-wrapper">
+            <table id="alertTable">
+                <thead>
+                <tr>
+                    <th>时间</th>
+                    <th>设备ID</th>
+                    <th>事件类型</th>
+                    <th>加速度 (X, Y, Z)</th>
+                    <th>强度</th>
+                </tr>
+                </thead>
+                <tbody id="alertTableBody">
+                <tr><td colspan="5" style="text-align:center">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="refresh-indicator" id="refreshIndicator">
+    自动刷新: 3秒
+</div>
+
+<script>
+    let autoRefreshInterval = null;
+
+    // 格式化时间
+    function formatTime(timeStr) {
+        if (!timeStr) return '未知';
+        return timeStr;
+    }
+
+    // 计算加速度强度
+    function calcMagnitude(accel) {
+        if (!accel || accel.length !== 3) return 'N/A';
+        const mag = Math.sqrt(accel[0]*accel[0] + accel[1]*accel[1] + accel[2]*accel[2]);
+        return Math.round(mag);
+    }
+
+    // 更新页面
+    function updateDashboard() {
+        fetch('/api/alerts')
+            .then(res => res.json())
+            .then(data => {
+                // 更新总数
+                const totalCount = document.getElementById('totalCount');
+                totalCount.textContent = data.length;
+
+                // 更新最新报警
+                const latestContainer = document.getElementById('latestContainer');
+                if (data.length > 0) {
+                    const latest = data[0];
+                    latestContainer.innerHTML = `
+                            <div class="latest-alert">
+                                <div class="label">🚨 最新报警</div>
+                                <div class="content">
+                                    设备 <strong>${latest.device || '未知'}</strong>
+                                    检测到 ${latest.event || '掉落'}
+                                </div>
+                                <div class="content">
+                                    加速度强度: <strong>${calcMagnitude(latest.accel)}</strong>
+                                </div>
+                                <div class="time">
+                                    接收时间: ${formatTime(latest.time_str)}
+                                </div>
+                            </div>
+                        `;
+                } else {
+                    latestContainer.innerHTML = `
+                            <div class="no-alert">
+                                ⏳ 暂无报警数据，等待设备上报...
+                            </div>
+                        `;
+                }
+
+                // 更新表格
+                const tbody = document.getElementById('alertTableBody');
+                if (data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center">暂无数据</td></tr>';
+                } else {
+                    tbody.innerHTML = data.map(alert => `
+                            <tr>
+                                <td>${formatTime(alert.time_str)}</td>
+                                <td>${alert.device || 'fall_sensor'}</td>
+                                <td>${alert.event || 'fall_detected'}</td>
+                                <td class="accel-values">(${alert.accel ? alert.accel.join(', ') : 'N/A'})</td>
+                                <td><strong>${calcMagnitude(alert.accel)}</strong></td>
+                            </tr>
+                        `).join('');
+                }
+            })
+            .catch(err => {
+                console.error('获取数据失败:', err);
+                document.getElementById('alertTableBody').innerHTML =
+                    '<tr><td colspan="5" style="text-align:center">连接服务器失败，请检查服务是否运行</td></tr>';
+            });
+    }
+
+    // 清空所有报警
+    function clearAlerts() {
+        if (confirm('确定要清空所有报警记录吗？')) {
+            fetch('/api/clear', { method: 'POST' })
+                .then(res => res.json())
+                .then(() => {
+                    updateDashboard();
+                })
+                .catch(err => {
+                    console.error('清空失败:', err);
+                    alert('清空失败，请重试');
+                });
+        }
+    }
+
+    // 启动自动刷新
+    function startAutoRefresh() {
+        if (autoRefreshInterval) clearInterval(autoRefreshInterval);
+        autoRefreshInterval = setInterval(updateDashboard, 3000);
+    }
+
+    // 初始化
+    document.addEventListener('DOMContentLoaded', () => {
+        updateDashboard();
+        startAutoRefresh();
+
+        // 绑定清空按钮
+        document.getElementById('clearBtn').addEventListener('click', clearAlerts);
+    });
+</script>
+</body>
+</html>
