@@ -182,7 +182,7 @@ void scanKeyfobs() {
 
     if (name.startsWith(KEYFOB_PREFIX)) {
       digitalWrite(ledPin, HIGH);
-      delay(10);
+      delay(100);
       digitalWrite(ledPin, LOW);
       
       if (!isInCooldown(name.c_str())) {
@@ -221,7 +221,7 @@ void setup() {
         records[i].keyfobId[0] != '\0') {
       recordCount++;
     } else {
-      // 遇到空记录，停止读取（假设后续都是空的）
+      // 遇到空记录，停止读取
       break;
     }
   }
