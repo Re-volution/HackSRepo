@@ -1,6 +1,7 @@
 /*
- * 项目：ESP32-C3 摔倒报警器（三段状态机版）
+ * 项目：ESP32-C3 摔倒报警器（三段状态机版 + AP配网）
  * 功能：检测自由落体+撞击+长时间静止，避免误触发
+ *       支持按键开启AP模式，通过网页配置WiFi
  * 硬件：ESP32-C3 + MPU6050
  * I2C：SDA→GPIO4, SCL→GPIO5
  */
@@ -8,13 +9,31 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WebServer.h>
+#include <EEPROM.h>
 
-// ========== 网络配置 ==========
-const char* ssid     = "JOJO990834";
-const char* password = "xiaoming88";
+// ========== 配网相关 ==========
+#define EEPROM_SIZE 512
+#define WIFI_SSID_ADDR 0
+#define WIFI_PWD_ADDR  64
+
+const int buttonPin = 9;           // 按键引脚（GPIO9）
+bool apModeActive = false;
+unsigned long apStartTime = 0;
+const unsigned long AP_TIMEOUT = 120000;  // AP模式2分钟后自动关闭
+
+WebServer server(80);
+
+// 默认WiFi配置 测试用的
+const char* default_ssid = "JOJO990834";
+const char* default_password = "xiaoming88";
+
+String current_ssid = "";
+String current_password = "";
+
+// ========== 测试用网络配置 ==========
 const char* serverUrl = "http://192.168.137.1:8080/api/drop";
-
-const unsigned long COOLDOWN_SECONDS = 10;    // 防重复触发间隔（秒）
+const unsigned long COOLDOWN_SECONDS = 10;
 
 // ========== MPU6050 寄存器地址 ==========
 const int MPU_ADDR = 0x68;
@@ -23,20 +42,14 @@ const int PWR_MGMT_1 = 0x6B;
 
 // ========== 状态机变量 ==========
 enum FallState {
-  IDLE,           // 空闲
-  FREEFALL,       // 检测到自由落体
-  IMPACT,         // 检测到撞击
-  STILL_WAIT      // 等待静止确认
+  IDLE, FREEFALL, IMPACT, STILL_WAIT
 };
-// 活动检测参数
-const long ACTIVITY_AMP_THRESHOLD = 8500;   // 单轴偏离基准超过此值才算“明显活动”
-const int ACTIVITY_CONFIRM_COUNT = 8;        // 需要连续多次明显活动才取消
 
-// 基准值变量
+const long ACTIVITY_AMP_THRESHOLD = 8500;
+const int ACTIVITY_CONFIRM_COUNT = 8;
+
 long baseAx, baseAy, baseAz;
 bool baseReady = false;
-
-// 活动计数器
 int activityCounter = 0;
 
 FallState fallState = IDLE;
@@ -46,54 +59,300 @@ unsigned long stillStartTime = 0;
 bool hasSent = false;
 unsigned long lastSentTime = 0;
 
-// ========== 阈值参数（可根据串口数据调整）==========
-const long FREEFALL_THRESHOLD = 4000;      // accelSum < 4000 认为失重
-const long IMPACT_THRESHOLD = 30000;       // accelMagnitude > 30000 认为撞击
-const long STILL_MAX_DEVIATION = 8500;     // 静止时三轴变化范围（峰值-谷值）
-const unsigned long STILL_REQUIRED_MS = 5000;   // 需要保持静止5秒
+const long FREEFALL_THRESHOLD = 4000;
+const long IMPACT_THRESHOLD = 30000;
+const long STILL_MAX_DEVIATION = 8500;
+const unsigned long STILL_REQUIRED_MS = 5000;
 
-
-// ========== 全局变量 ==========
 int16_t ax, ay, az;
-long accelMagnitude;           // 合成加速度强度
-const int ledPin = 8;          // ESP32-C3 板载 LED
+long accelMagnitude;
+const int ledPin = 8;
 
-// 用于静止检测的滑动窗口（10个样本）
 long accelSamples[3][10];
-int sampleIndex = 0; 
+int sampleIndex = 0;
 bool samplesReady = false;
-// 唯一id 
-const String uuid = "老王家";//这里可以换成唯一id做映射防止重名之类的
+const String uuid = "老王家";
 
-// ========== MPU6050 初始化 ==========
+// ========== EEPROM 存储函数 ==========
+void saveWiFiConfig(String ssid, String password) {
+  EEPROM.begin(EEPROM_SIZE);
+  
+  for (int i = 0; i < ssid.length(); i++) {
+    EEPROM.write(WIFI_SSID_ADDR + i, ssid[i]);
+  }
+  EEPROM.write(WIFI_SSID_ADDR + ssid.length(), '\0');
+  
+  for (int i = 0; i < password.length(); i++) {
+    EEPROM.write(WIFI_PWD_ADDR + i, password[i]);
+  }
+  EEPROM.write(WIFI_PWD_ADDR + password.length(), '\0');
+  
+  EEPROM.commit();
+  Serial.println("WiFi配置已保存");
+}
+
+void loadWiFiConfig() {
+  EEPROM.begin(EEPROM_SIZE);
+  
+  String ssid = "";
+  String pwd = "";
+  
+  // 读取SSID
+  for (int i = 0; i < 64; i++) {
+    char c = EEPROM.read(WIFI_SSID_ADDR + i);
+    if (c == '\0') break;
+    if (c != 0xFF) ssid += c;
+  }
+  
+  // 读取密码
+  for (int i = 0; i < 64; i++) {
+    char c = EEPROM.read(WIFI_PWD_ADDR + i);
+    if (c == '\0') break;
+    if (c != 0xFF) pwd += c;
+  }
+  
+  if (ssid.length() > 0) {
+    current_ssid = ssid;
+    current_password = pwd;
+    Serial.print("读取到保存的WiFi: ");
+    Serial.println(current_ssid);
+  } else {
+    // 使用默认配置
+    current_ssid = String(default_ssid);
+    current_password = String(default_password);
+    Serial.println("使用默认WiFi配置");
+    Serial.print("SSID: ");
+    Serial.println(current_ssid);
+  }
+}
+
+// ========== 连接WiFi ==========
+bool connectWiFi() {
+  Serial.print("连接 WiFi: ");
+  Serial.println(current_ssid);
+  
+  WiFi.begin(current_ssid.c_str(), current_password.c_str());
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi 已连接");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    return true;
+  } else {
+    Serial.println("\nWiFi 连接失败");
+    return false;
+  }
+}
+
+// ========== 测试WiFi连接 ==========
+bool testWiFiConnection(String ssid, String password) {
+  Serial.print("测试连接 WiFi: ");
+  Serial.println(ssid);
+  
+  WiFi.begin(ssid.c_str(), password.c_str());
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n连接成功！");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    WiFi.disconnect(true);
+    delay(100);
+    return true;
+  } else {
+    Serial.println("\n连接失败！");
+    return false;
+  }
+}
+
+// ========== LED 闪烁指示 ==========
+void flashLED(int times, int durationMs) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(ledPin, HIGH);
+    delay(durationMs);
+    digitalWrite(ledPin, LOW);
+    delay(durationMs);
+  }
+}
+
+// ========== AP模式网页 ==========
+void handleRoot() {
+  String html = "<!DOCTYPE html><html>";
+  html += "<head><meta charset='UTF-8'><meta name='viewport' content='width=device-width'>";
+  html += "<title>摔倒报警器配网</title>";
+  html += "<style>";
+  html += "body{font-family:Arial;text-align:center;margin-top:50px;background:#1a1a2e;color:#eee;}";
+  html += ".container{background:#16213e;padding:30px;border-radius:15px;max-width:400px;margin:auto;}";
+  html += "input{width:100%;padding:12px;margin:10px 0;border:none;border-radius:8px;}";
+  html += "button{background:#e94560;color:white;padding:12px 24px;border:none;border-radius:8px;cursor:pointer;font-size:16px;}";
+  html += "button:hover{background:#c73d54;}";
+  html += ".info{color:#888;margin-top:20px;font-size:12px;}";
+  html += "</style></head>";
+  html += "<body><div class='container'>";
+  html += "<h2>⚠️ 摔倒报警器配网</h2>";
+  html += "<p>当前WiFi连接失败，请配置</p>";
+  html += "<form action='/save' method='POST'>";
+  html += "<input type='text' name='ssid' placeholder='WiFi名称' required>";
+  html += "<input type='password' name='password' placeholder='WiFi密码'>";
+  html += "<button type='submit'>保存并测试</button>";
+  html += "</form>";
+  html += "<div class='info'>保存后会先测试连接，成功才重启</div>";
+  html += "</div></body></html>";
+  server.send(200, "text/html", html);
+}
+
+void handleSave() {
+  if (!server.hasArg("ssid")) {
+    server.send(400, "text/plain", "Missing ssid");
+    return;
+  }
+  
+  String ssid = server.arg("ssid");
+  String password = server.arg("password");
+  
+  Serial.print("收到WiFi配置 - SSID: ");
+  Serial.println(ssid);
+  
+  // 先测试是否能连上
+  Serial.println("正在测试WiFi连接...");
+  
+  if (testWiFiConnection(ssid, password)) {
+    // 连接成功：闪烁1次
+    flashLED(1, 200);
+    
+    // 保存配置
+    saveWiFiConfig(ssid, password);
+    
+    // 返回成功页面，3秒后重启
+    String html = "<!DOCTYPE html><html>";
+    html += "<head><meta charset='UTF-8'><meta http-equiv='refresh' content='3;url=/'>";
+    html += "<title>保存成功</title>";
+    html += "<style>body{font-family:Arial;text-align:center;margin-top:50px;background:#1a1a2e;color:#eee;}</style>";
+    html += "</head><body>";
+    html += "<h2>✅ WiFi连接成功！</h2>";
+    html += "<p>设备将在3秒后重启...</p>";
+    html += "</body></html>";
+    server.send(200, "text/html", html);
+    
+    delay(3000);
+    ESP.restart();
+    
+  } else {
+    // 连接失败：快速闪烁5次
+    flashLED(5, 150);
+    
+    // 返回失败页面，不重启
+    String html = "<!DOCTYPE html><html>";
+    html += "<head><meta charset='UTF-8'><meta name='viewport' content='width=device-width'>";
+    html += "<title>连接失败</title>";
+    html += "<style>";
+    html += "body{font-family:Arial;text-align:center;margin-top:50px;background:#1a1a2e;color:#eee;}";
+    html += ".container{background:#16213e;padding:30px;border-radius:15px;max-width:400px;margin:auto;}";
+    html += "button{background:#e94560;color:white;padding:12px 24px;border:none;border-radius:8px;cursor:pointer;font-size:16px;margin-top:20px;}";
+    html += ".error{color:#e94560;}";
+    html += "</style></head>";
+    html += "<body><div class='container'>";
+    html += "<h2 class='error'>❌ WiFi连接失败！</h2>";
+    html += "<p>请检查WiFi名称和密码是否正确</p>";
+    html += "<p>当前WiFi: <strong>" + ssid + "</strong></p>";
+    html += "<button onclick='history.back()'>返回重试</button>";
+    html += "</div></body></html>";
+    server.send(200, "text/html", html);
+    
+    Serial.println("WiFi连接失败，请重试");
+  }
+}
+
+void startAPMode() {
+  apModeActive = true;
+  apStartTime = millis();
+  
+  WiFi.disconnect(true);
+  delay(100);
+  
+  WiFi.softAP("FallDetector_AP", "12345678");
+  
+  Serial.println("=== AP模式已开启 ===");
+  Serial.println("热点: FallDetector_AP 密码: 12345678");
+  Serial.print("IP: ");
+  Serial.println(WiFi.softAPIP());
+  
+  server.on("/", handleRoot);
+  server.on("/save", handleSave);
+  server.begin();
+  
+  flashLED(5, 100);  // 开启AP时闪烁5次提示
+}
+
+void stopAPMode() {
+  server.stop();
+  WiFi.softAPdisconnect(true);
+  apModeActive = false;
+  Serial.println("=== AP模式已关闭 ===");
+}
+
+void checkButton() {
+  static int lastState = HIGH;
+  static unsigned long lastPressTime = 0;
+  static int pressCount = 0;
+  
+  int currentState = digitalRead(buttonPin);
+  
+  if (lastState == HIGH && currentState == LOW) {
+    unsigned long now = millis();
+    if (now - lastPressTime < 500) {
+      pressCount++;
+    } else {
+      pressCount = 1;
+    }
+    lastPressTime = now;
+    Serial.print("按键按下: ");
+    Serial.println(pressCount);
+  }
+  lastState = currentState;
+  
+  if (pressCount == 3 && !apModeActive) {
+    pressCount = 0;
+    startAPMode();
+  }
+}
+
+// ========== MPU6050 函数 ==========
 bool initMPU6050() {
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(PWR_MGMT_1);
   Wire.write(0x00);
-  if (Wire.endTransmission() != 0) {
-    return false;
-  }
+  if (Wire.endTransmission() != 0) return false;
   delay(100);
   return true;
 }
 
-// ========== 读取加速度数据 ==========
 void readAccel() {
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(ACCEL_XOUT_H);
   Wire.endTransmission(false);
   Wire.requestFrom(MPU_ADDR, 6, true);
-  
   if (Wire.available() == 6) {
     ax = (Wire.read() << 8) | Wire.read();
     ay = (Wire.read() << 8) | Wire.read();
     az = (Wire.read() << 8) | Wire.read();
   }
-  
   accelMagnitude = sqrt((long)ax * ax + (long)ay * ay + (long)az * az);
 }
 
-// ========== 记录加速度样本（用于静止检测）==========
 void recordAccelSample() {
   accelSamples[0][sampleIndex] = ax;
   accelSamples[1][sampleIndex] = ay;
@@ -102,14 +361,11 @@ void recordAccelSample() {
   if (sampleIndex == 0) samplesReady = true;
 }
 
-// ========== 检测最近10个样本是否静止 ==========
 bool isStill() {
   if (!samplesReady) return false;
-  
   long minX = 32767, maxX = -32768;
   long minY = 32767, maxY = -32768;
   long minZ = 32767, maxZ = -32768;
-  
   for (int i = 0; i < 10; i++) {
     if (accelSamples[0][i] < minX) minX = accelSamples[0][i];
     if (accelSamples[0][i] > maxX) maxX = accelSamples[0][i];
@@ -118,30 +374,21 @@ bool isStill() {
     if (accelSamples[2][i] < minZ) minZ = accelSamples[2][i];
     if (accelSamples[2][i] > maxZ) maxZ = accelSamples[2][i];
   }
-  
-  long rangeX = maxX - minX;
-  long rangeY = maxY - minY;
-  long rangeZ = maxZ - minZ;
-  
-  return (rangeX < STILL_MAX_DEVIATION &&
-          rangeY < STILL_MAX_DEVIATION &&
-          rangeZ < STILL_MAX_DEVIATION);
+  return (maxX - minX) < STILL_MAX_DEVIATION &&
+         (maxY - minY) < STILL_MAX_DEVIATION &&
+         (maxZ - minZ) < STILL_MAX_DEVIATION;
 }
 
-// ========== 发送报警到服务器 ==========
 void sendAlert() {
   Serial.print("连接 WiFi: ");
-  Serial.println(ssid);
+  Serial.println(current_ssid);
   
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
-  WiFi.begin(ssid, password);
+  WiFi.begin(current_ssid.c_str(), current_password.c_str());
   
   int attempts = 0;
-  const int maxRetries = 15;
-  const int retryDelay = 500;
-
-  while (WiFi.status() != WL_CONNECTED && attempts < maxRetries) {
-    delay(retryDelay);
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
     Serial.print(".");
     attempts++;
   }
@@ -186,7 +433,6 @@ void sendAlert() {
   Serial.println("WiFi 断开完成");
 }
 
-// ========== 进入深度睡眠 ==========
 void goToDeepSleep() {
   Serial.println("进入深度睡眠，功耗降至约 5μA...");
   digitalWrite(ledPin, LOW);
@@ -200,8 +446,8 @@ void setup() {
   delay(1000);
   
   pinMode(ledPin, OUTPUT);
-  pinMode(10, OUTPUT);
-  digitalWrite(10, HIGH);
+  pinMode(buttonPin, INPUT_PULLUP);
+  
   digitalWrite(ledPin, LOW);
   
   for (int i = 0; i < 3; i++) {
@@ -211,7 +457,15 @@ void setup() {
     delay(100);
   }
   
-  Serial.println("=== 摔倒报警器启动（三段状态机）===");
+  Serial.println("=== 摔倒报警器启动（三段状态机 + AP配网）===");
+  
+  // 加载WiFi配置
+  loadWiFiConfig();
+  
+  // 尝试连接WiFi
+  if (!connectWiFi()) {
+    Serial.println("WiFi连接失败，按3次按键开启AP配网模式");
+  }
   
   Wire.begin(4, 5);
   Serial.println("I2C 初始化完成");
@@ -227,7 +481,6 @@ void setup() {
   }
   Serial.println("MPU6050 初始化成功");
   
-  // 预热，让传感器稳定
   for (int i = 0; i < 10; i++) {
     readAccel();
     recordAccelSample();
@@ -235,15 +488,26 @@ void setup() {
   }
   
   Serial.println("开始监控，等待摔倒事件...");
+  Serial.println("提示：连续按3次按键可开启AP配网模式");
 }
 
 void loop() {
+  checkButton();
+  
+  if (apModeActive) {
+    server.handleClient();
+    if (millis() - apStartTime > AP_TIMEOUT) {
+      stopAPMode();
+    }
+    delay(10);
+    return;
+  }
+  
   readAccel();
   recordAccelSample();
   
   long accelSum = abs(ax) + abs(ay) + abs(az);
   
-  // 调试输出：仅当数值异常或状态变化时打印（可自行调整）
   if (accelMagnitude > 40000 || accelSum < 8000) {
     Serial.print("Sum="); Serial.print(accelSum);
     Serial.print(" Mag="); Serial.print(accelMagnitude);
@@ -278,11 +542,9 @@ void loop() {
       break;
       
     case IMPACT:
-      // 延时短暂避过活动期，然后进入静止等待
-       if (millis() - impactTime > 500) {
+      if (millis() - impactTime > 500) {
         fallState = STILL_WAIT;
         stillStartTime = millis();
-        // 记录静止基准（当前加速度）
         baseAx = ax;
         baseAy = ay;
         baseAz = az;
@@ -294,22 +556,19 @@ void loop() {
       
     case STILL_WAIT: {
       if (!baseReady) {
-    // 如果基准未设，马上设置
         baseAx = ax; baseAy = ay; baseAz = az;
         baseReady = true;
       }
-
-      // 计算与基准的偏差绝对值
+      
       long diffX = abs(ax - baseAx);
       long diffY = abs(ay - baseAy);
       long diffZ = abs(az - baseAz);
-
+      
       bool significantMove = (diffX > ACTIVITY_AMP_THRESHOLD ||
                               diffY > ACTIVITY_AMP_THRESHOLD ||
                               diffZ > ACTIVITY_AMP_THRESHOLD);
-
+      
       if (!significantMove) {
-        
         unsigned long stillDuration = millis() - stillStartTime;
         if (stillDuration >= STILL_REQUIRED_MS) {
           Serial.println("⚠️ 确认摔倒且长时间静止！触发报警");
@@ -324,18 +583,9 @@ void loop() {
             lastSentTime = millis();
             hasSent = true;
             Serial.println("报警已发送，5秒后深度睡眠...");
-            
-            for (int i = 0; i < 5; i++) {
-              delay(500);
-              digitalWrite(10, LOW);
-              delay(500);
-              digitalWrite(10, HIGH);
-            }
-            
-            
             goToDeepSleep();
           }
-          fallState = IDLE;   // 报警后复位状态
+          fallState = IDLE;
         }
       } else {
         activityCounter++;
@@ -349,5 +599,5 @@ void loop() {
     }
   }
   
-  delay(20);   // 50Hz 采样率
+  delay(20);
 }

@@ -2,9 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
@@ -51,7 +51,7 @@ func main() {
 
 // 加载历史数据
 func loadAlerts() {
-	data, err := ioutil.ReadFile(dataFile)
+	data, err := os.ReadFile(dataFile)
 	if err != nil {
 		log.Println("没有历史数据文件，将创建新文件")
 		return
@@ -79,7 +79,7 @@ func saveAlerts() {
 		return
 	}
 
-	err = ioutil.WriteFile(dataFile, data, 0644)
+	err = os.WriteFile(dataFile, data, 0644)
 	if err != nil {
 		log.Println("保存数据失败:", err)
 	}

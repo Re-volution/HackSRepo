@@ -12,10 +12,10 @@
 #include <ArduinoBLE.h>
 
 // ========== 钥匙扣配置 ==========
-#define KEYFOB_ID "001"                    // 每个钥匙扣唯一编号
+#define KEYFOB_ID "001"                    // 每个钥匙扣唯一编号，可以在后续对每个唯一名字做映射，对应具体是哪家的谁
 const char* KEYFOB_NAME = "KEYFOB_" KEYFOB_ID;  // 广播名称：KEYFOB_001
 
-// ========== LED 引脚（可选，省电可去掉）==========
+// ========== LED 引脚（做演示使用，实际发行要去掉这些东西，不必然对功耗有影响）==========
 const int ledPin = 8;
 
 void setup() {
@@ -37,7 +37,7 @@ void setup() {
   // 这样功耗最低
   BLE.advertise();
   
-  // 启动提示：快闪2次
+  // 启动提示：快闪2次，启动提示，万一没电了好知道
   for (int i = 0; i < 2; i++) {
     digitalWrite(ledPin, HIGH);
     delay(50);
@@ -48,8 +48,7 @@ void setup() {
 }
  
 void loop() {
-  // 钥匙扣什么都不用做，BLE 库已在后台自动广播
-  // 为了让 LED 偶尔闪烁指示工作状态（可选，会增加功耗）
+  // 为了让 LED 偶尔闪烁指示工作状态（会增加功耗，后续可以去掉）
   static unsigned long lastBlink = 0;
   if (millis() - lastBlink > 30000) {  // 每30秒闪一次
     digitalWrite(ledPin, HIGH);

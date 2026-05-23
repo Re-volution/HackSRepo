@@ -30,10 +30,10 @@ Record records[300];
 int recordCount = 0;
 
 // ========== BLE 服务 UUID ==========
-#define SERVICE_UUID        "19B10000-E8F2-537E-4F6C-D104768A1214"
-#define COUNT_CHAR_UUID     "19B10001-E8F2-537E-4F6C-D104768A1215"
-#define DATA_CHAR_UUID      "19B10002-E8F2-537E-4F6C-D104768A1216"
-#define FENCE_CHAR_UUID     "19B10003-E8F2-537E-4F6C-D104768A1217"
+#define SERVICE_UUID        "19B10000-E8F2-537E-4F6C-D104768A1214"//主id
+#define COUNT_CHAR_UUID     "19B10001-E8F2-537E-4F6C-D104768A1215"//数量获取的服务id
+#define DATA_CHAR_UUID      "19B10002-E8F2-537E-4F6C-D104768A1216"//数据获取的id
+#define FENCE_CHAR_UUID     "19B10003-E8F2-537E-4F6C-D104768A1217"//获取名字的id
 
 BLEServer* pServer = NULL;
 BLECharacteristic* pCountCharacteristic = NULL;
@@ -234,7 +234,6 @@ void setup() {
 }
 
 void loop() {
-
   scanKeyfobs();
   delay(500);
 }
