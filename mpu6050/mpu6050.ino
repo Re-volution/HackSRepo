@@ -1,9 +1,11 @@
 /*
- * 项目：ESP32-C3 摔倒报警器（三段状态机版 + AP配网）
+ * 项目：ESP32-C3 摔倒报警器（三段状态机版 + AP配网 + 心跳）
  * 功能：检测自由落体+撞击+长时间静止，避免误触发
  *       支持按键开启AP模式，通过网页配置WiFi
- * 硬件：ESP32-C3 + MPU6050
+ *       每20小时发送一次心跳到服务器
+ * 硬件：ESP32-C3 + MPU6050 + 蜂鸣器
  * I2C：SDA→GPIO4, SCL→GPIO5
+ * 蜂鸣器：GPIO10
  */
 
 #include <Wire.h>
@@ -24,16 +26,20 @@ const unsigned long AP_TIMEOUT = 120000;  // AP模式2分钟后自动关闭
 
 WebServer server(80);
 
-// 默认WiFi配置 测试用的
+// 默认WiFi配置
 const char* default_ssid = "JOJO990834";
 const char* default_password = "xiaoming88";
 
 String current_ssid = "";
 String current_password = "";
 
-// ========== 测试用网络配置 ==========
-const char* serverUrl = "http://192.168.137.1:8080/api/drop";
+// ========== 服务器配置 ==========
+const char* serverUrl = "http://192.168.137.1:8080/api";
 const unsigned long COOLDOWN_SECONDS = 10;
+
+// ========== 心跳配置 ==========
+const unsigned long HEARTBEAT_INTERVAL = 20 * 60 * 60 * 1000;  // 20小时
+unsigned long lastHeartbeat = 0;
 
 // ========== MPU6050 寄存器地址 ==========
 const int MPU_ADDR = 0x68;
@@ -67,6 +73,7 @@ const unsigned long STILL_REQUIRED_MS = 5000;
 int16_t ax, ay, az;
 long accelMagnitude;
 const int ledPin = 8;
+const int buzzerPin = 10;
 
 long accelSamples[3][10];
 int sampleIndex = 0;
@@ -97,14 +104,12 @@ void loadWiFiConfig() {
   String ssid = "";
   String pwd = "";
   
-  // 读取SSID
   for (int i = 0; i < 64; i++) {
     char c = EEPROM.read(WIFI_SSID_ADDR + i);
     if (c == '\0') break;
     if (c != 0xFF) ssid += c;
   }
   
-  // 读取密码
   for (int i = 0; i < 64; i++) {
     char c = EEPROM.read(WIFI_PWD_ADDR + i);
     if (c == '\0') break;
@@ -117,12 +122,9 @@ void loadWiFiConfig() {
     Serial.print("读取到保存的WiFi: ");
     Serial.println(current_ssid);
   } else {
-    // 使用默认配置
     current_ssid = String(default_ssid);
     current_password = String(default_password);
     Serial.println("使用默认WiFi配置");
-    Serial.print("SSID: ");
-    Serial.println(current_ssid);
   }
 }
 
@@ -144,6 +146,7 @@ bool connectWiFi() {
     Serial.println("\nWiFi 已连接");
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
+
     return true;
   } else {
     Serial.println("\nWiFi 连接失败");
@@ -167,8 +170,6 @@ bool testWiFiConnection(String ssid, String password) {
   
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\n连接成功！");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
     WiFi.disconnect(true);
     delay(100);
     return true;
@@ -178,7 +179,7 @@ bool testWiFiConnection(String ssid, String password) {
   }
 }
 
-// ========== LED 闪烁指示 ==========
+// ========== LED 闪烁 ==========
 void flashLED(int times, int durationMs) {
   for (int i = 0; i < times; i++) {
     digitalWrite(ledPin, HIGH);
@@ -186,6 +187,127 @@ void flashLED(int times, int durationMs) {
     digitalWrite(ledPin, LOW);
     delay(durationMs);
   }
+}
+
+// ========== 蜂鸣器鸣叫 ==========
+void beep(int times, int durationMs) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(buzzerPin, LOW);
+    delay(durationMs);
+    digitalWrite(buzzerPin, HIGH);
+    delay(durationMs);
+  }
+}
+
+// ========== 发送心跳 ==========
+void sendHeartbeat() {
+  Serial.println("发送心跳...");
+  
+  WiFi.begin(current_ssid.c_str(), current_password.c_str());
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 15) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi 连接失败，心跳发送失败");
+    return;
+  }
+  
+  Serial.println("\nWiFi 已连接");
+  
+  HTTPClient http;
+  http.begin(String(serverUrl) + "/heartbeat");
+  http.addHeader("Content-Type", "application/json");
+  
+  String jsonData = "{\"device\":\"" + uuid + "\",\"type\":\"heartbeat\",\"timestamp\":";
+  jsonData += millis();
+  jsonData += "}";
+  
+  Serial.print("发送心跳: ");
+  Serial.println(jsonData);
+  
+  int httpCode = http.POST(jsonData);
+  if (httpCode > 0) {
+    Serial.print("心跳响应码: ");
+    Serial.println(httpCode);
+  } else {
+    Serial.print("心跳发送失败: ");
+    Serial.println(http.errorToString(httpCode));
+  }
+  
+  http.end();
+  WiFi.disconnect(true);
+  Serial.println("心跳发送完成，WiFi 已断开");
+}
+
+// ========== 发送报警 ==========
+void sendAlert() {
+  Serial.print("连接 WiFi: ");
+  Serial.println(current_ssid);
+  
+  WiFi.begin(current_ssid.c_str(), current_password.c_str());
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi 连接失败！");
+    return;
+  }
+  
+  Serial.println("\nWiFi 已连接");
+  
+  HTTPClient http;
+  http.begin(String(serverUrl) + "/drop");
+  http.addHeader("Content-Type", "application/json");
+  
+  String jsonData = "{\"device\":\"" + uuid + "\",\"event\":\"跌落\",\"timestamp\":";
+  jsonData += millis();
+  jsonData += ",\"accel\":[";
+  jsonData += ax;
+  jsonData += ",";
+  jsonData += ay;
+  jsonData += ",";
+  jsonData += az;
+  jsonData += "]}";
+  
+  Serial.print("发送数据: ");
+  Serial.println(jsonData);
+  
+  int httpCode = http.POST(jsonData);
+  if (httpCode > 0) {
+    Serial.print("HTTP 响应码: ");
+    Serial.println(httpCode);
+    String response = http.getString();
+    Serial.println("服务器响应: " + response);
+    
+    // 报警成功：蜂鸣器鸣叫5次
+    beep(5, 300);
+  } else {
+    Serial.print("HTTP 请求失败: ");
+    Serial.println(http.errorToString(httpCode));
+  }
+  
+  http.end();
+  WiFi.disconnect(true);
+  Serial.println("WiFi 断开完成");
+}
+
+// ========== 深度睡眠 ==========
+void goToDeepSleep() {
+  Serial.println("进入深度睡眠，功耗降至约 5μA...");
+  digitalWrite(ledPin, LOW);
+  digitalWrite(buzzerPin, HIGH);
+  esp_sleep_enable_timer_wakeup(60 * 1000000ULL);
+  esp_deep_sleep_start();
 }
 
 // ========== AP模式网页 ==========
@@ -198,18 +320,14 @@ void handleRoot() {
   html += ".container{background:#16213e;padding:30px;border-radius:15px;max-width:400px;margin:auto;}";
   html += "input{width:100%;padding:12px;margin:10px 0;border:none;border-radius:8px;}";
   html += "button{background:#e94560;color:white;padding:12px 24px;border:none;border-radius:8px;cursor:pointer;font-size:16px;}";
-  html += "button:hover{background:#c73d54;}";
-  html += ".info{color:#888;margin-top:20px;font-size:12px;}";
   html += "</style></head>";
   html += "<body><div class='container'>";
   html += "<h2>⚠️ 摔倒报警器配网</h2>";
-  html += "<p>当前WiFi连接失败，请配置</p>";
   html += "<form action='/save' method='POST'>";
   html += "<input type='text' name='ssid' placeholder='WiFi名称' required>";
   html += "<input type='password' name='password' placeholder='WiFi密码'>";
   html += "<button type='submit'>保存并测试</button>";
   html += "</form>";
-  html += "<div class='info'>保存后会先测试连接，成功才重启</div>";
   html += "</div></body></html>";
   server.send(200, "text/html", html);
 }
@@ -226,21 +344,14 @@ void handleSave() {
   Serial.print("收到WiFi配置 - SSID: ");
   Serial.println(ssid);
   
-  // 先测试是否能连上
-  Serial.println("正在测试WiFi连接...");
-  
   if (testWiFiConnection(ssid, password)) {
-    // 连接成功：闪烁1次
     flashLED(1, 200);
-    
-    // 保存配置
     saveWiFiConfig(ssid, password);
     
-    // 返回成功页面，3秒后重启
     String html = "<!DOCTYPE html><html>";
     html += "<head><meta charset='UTF-8'><meta http-equiv='refresh' content='3;url=/'>";
     html += "<title>保存成功</title>";
-    html += "<style>body{font-family:Arial;text-align:center;margin-top:50px;background:#1a1a2e;color:#eee;}</style>";
+    html += "<style>body{font-family:Arial;text-align:center;margin-top:50px;}</style>";
     html += "</head><body>";
     html += "<h2>✅ WiFi连接成功！</h2>";
     html += "<p>设备将在3秒后重启...</p>";
@@ -249,30 +360,18 @@ void handleSave() {
     
     delay(3000);
     ESP.restart();
-    
   } else {
-    // 连接失败：快速闪烁5次
     flashLED(5, 150);
     
-    // 返回失败页面，不重启
     String html = "<!DOCTYPE html><html>";
-    html += "<head><meta charset='UTF-8'><meta name='viewport' content='width=device-width'>";
+    html += "<head><meta charset='UTF-8'>";
     html += "<title>连接失败</title>";
-    html += "<style>";
-    html += "body{font-family:Arial;text-align:center;margin-top:50px;background:#1a1a2e;color:#eee;}";
-    html += ".container{background:#16213e;padding:30px;border-radius:15px;max-width:400px;margin:auto;}";
-    html += "button{background:#e94560;color:white;padding:12px 24px;border:none;border-radius:8px;cursor:pointer;font-size:16px;margin-top:20px;}";
-    html += ".error{color:#e94560;}";
-    html += "</style></head>";
-    html += "<body><div class='container'>";
-    html += "<h2 class='error'>❌ WiFi连接失败！</h2>";
-    html += "<p>请检查WiFi名称和密码是否正确</p>";
-    html += "<p>当前WiFi: <strong>" + ssid + "</strong></p>";
+    html += "<style>body{font-family:Arial;text-align:center;margin-top:50px;}</style>";
+    html += "</head><body>";
+    html += "<h2>❌ WiFi连接失败！</h2>";
     html += "<button onclick='history.back()'>返回重试</button>";
-    html += "</div></body></html>";
+    html += "</body></html>";
     server.send(200, "text/html", html);
-    
-    Serial.println("WiFi连接失败，请重试");
   }
 }
 
@@ -287,14 +386,13 @@ void startAPMode() {
   
   Serial.println("=== AP模式已开启 ===");
   Serial.println("热点: FallDetector_AP 密码: 12345678");
-  Serial.print("IP: ");
-  Serial.println(WiFi.softAPIP());
   
   server.on("/", handleRoot);
   server.on("/save", handleSave);
   server.begin();
   
-  flashLED(5, 100);  // 开启AP时闪烁5次提示
+  beep(3, 150);
+  flashLED(5, 100);
 }
 
 void stopAPMode() {
@@ -379,75 +477,15 @@ bool isStill() {
          (maxZ - minZ) < STILL_MAX_DEVIATION;
 }
 
-void sendAlert() {
-  Serial.print("连接 WiFi: ");
-  Serial.println(current_ssid);
-  
-  WiFi.setTxPower(WIFI_POWER_19_5dBm);
-  WiFi.begin(current_ssid.c_str(), current_password.c_str());
-  
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-  
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nWiFi 连接失败！");
-    return;
-  }
-  
-  Serial.println("\nWiFi 已连接");
-  
-  HTTPClient http;
-  http.begin(serverUrl);
-  http.addHeader("Content-Type", "application/json");
-  
-  String jsonData = "{\"device\":\"" + String(uuid) + "\",\"event\":\"跌落\",\"timestamp\":";
-  jsonData += millis();
-  jsonData += ",\"accel\":[";
-  jsonData += ax;
-  jsonData += ",";
-  jsonData += ay;
-  jsonData += ",";
-  jsonData += az;
-  jsonData += "]}";
-  
-  Serial.print("发送数据: ");
-  Serial.println(jsonData);
-  
-  int httpCode = http.POST(jsonData);
-  if (httpCode > 0) {
-    Serial.print("HTTP 响应码: ");
-    Serial.println(httpCode);
-    String response = http.getString();
-    Serial.println("服务器响应: " + response);
-  } else {
-    Serial.print("HTTP 请求失败: ");
-    Serial.println(http.errorToString(httpCode));
-  }
-  
-  http.end();
-  WiFi.disconnect(true);
-  Serial.println("WiFi 断开完成");
-}
-
-void goToDeepSleep() {
-  Serial.println("进入深度睡眠，功耗降至约 5μA...");
-  digitalWrite(ledPin, LOW);
-  esp_sleep_enable_timer_wakeup(60 * 1000000ULL);
-  esp_deep_sleep_start();
-}
-
 // ========== 主程序 ==========
 void setup() {
   Serial.begin(115200);
   delay(1000);
   
   pinMode(ledPin, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
   pinMode(buttonPin, INPUT_PULLUP);
-  
+  digitalWrite(buzzerPin, HIGH);
   digitalWrite(ledPin, LOW);
   
   for (int i = 0; i < 3; i++) {
@@ -457,14 +495,15 @@ void setup() {
     delay(100);
   }
   
-  Serial.println("=== 摔倒报警器启动（三段状态机 + AP配网）===");
+  Serial.println("=== 摔倒报警器启动（三段状态机 + AP配网 + 心跳）===");
   
-  // 加载WiFi配置
   loadWiFiConfig();
   
-  // 尝试连接WiFi
   if (!connectWiFi()) {
     Serial.println("WiFi连接失败，按3次按键开启AP配网模式");
+  }else{
+    sendHeartbeat();
+    lastHeartbeat = millis();
   }
   
   Wire.begin(4, 5);
@@ -487,6 +526,8 @@ void setup() {
     delay(50);
   }
   
+  lastHeartbeat = millis();
+  
   Serial.println("开始监控，等待摔倒事件...");
   Serial.println("提示：连续按3次按键可开启AP配网模式");
 }
@@ -501,6 +542,12 @@ void loop() {
     }
     delay(10);
     return;
+  }
+  
+  // 心跳检测
+  if (millis() - lastHeartbeat > HEARTBEAT_INTERVAL) {
+    lastHeartbeat = millis();
+    sendHeartbeat();
   }
   
   readAccel();

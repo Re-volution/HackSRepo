@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>掉落报警中控台</title>
+    <title>摔倒报警中控台</title>
     <style>
         * {
             margin: 0;
@@ -24,7 +24,6 @@
             padding: 20px;
         }
 
-        /* 头部 */
         .header {
             display: flex;
             justify-content: space-between;
@@ -37,12 +36,6 @@
         .header h1 {
             font-size: 28px;
             color: #e94560;
-        }
-
-        .header h1 span {
-            color: #eee;
-            font-size: 14px;
-            margin-left: 10px;
         }
 
         .stats {
@@ -63,11 +56,6 @@
             color: #e94560;
         }
 
-        .stat-card .label {
-            font-size: 12px;
-            opacity: 0.8;
-        }
-
         .btn-clear {
             background: #e94560;
             border: none;
@@ -75,39 +63,18 @@
             border-radius: 8px;
             color: white;
             cursor: pointer;
-            font-size: 14px;
-            transition: all 0.3s;
         }
 
         .btn-clear:hover {
             background: #c73d54;
-            transform: scale(1.02);
         }
 
-        /* 最新报警卡片 */
         .latest-alert {
             background: linear-gradient(135deg, #e94560 0%, #c73d54 100%);
             border-radius: 15px;
             padding: 20px;
             margin-bottom: 30px;
             text-align: center;
-        }
-
-        .latest-alert .label {
-            font-size: 12px;
-            opacity: 0.9;
-            letter-spacing: 2px;
-        }
-
-        .latest-alert .content {
-            font-size: 18px;
-            margin-top: 10px;
-        }
-
-        .latest-alert .time {
-            font-size: 14px;
-            margin-top: 10px;
-            opacity: 0.9;
         }
 
         .no-alert {
@@ -119,20 +86,89 @@
             margin-bottom: 30px;
         }
 
-        /* 历史记录表格 */
-        .history-section {
+        /* 设备管理区域 */
+        .device-section {
             background: rgba(255,255,255,0.05);
             border-radius: 15px;
             padding: 20px;
+            margin-bottom: 30px;
         }
 
-        .history-section h3 {
-            margin-bottom: 15px;
+        .device-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .device-header h3 {
             color: #e94560;
         }
 
-        .table-wrapper {
-            overflow-x: auto;
+        .search-box {
+            display: flex;
+            gap: 10px;
+        }
+
+        .search-box input {
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: none;
+            width: 200px;
+        }
+
+        .search-box button {
+            background: #e94560;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+        }
+
+        .device-add {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .device-add input {
+            flex: 1;
+            padding: 10px;
+            border-radius: 8px;
+            border: none;
+        }
+
+        .device-add button {
+            background: #e94560;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+        }
+
+        /* 表格容器 - 滚动条 */
+        .table-container {
+            max-height: 400px;
+            overflow-y: auto;
+            border-radius: 8px;
+        }
+
+        .table-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .table-container::-webkit-scrollbar-track {
+            background: rgba(255,255,255,0.05);
+            border-radius: 4px;
+        }
+
+        .table-container::-webkit-scrollbar-thumb {
+            background: #e94560;
+            border-radius: 4px;
         }
 
         table {
@@ -148,32 +184,53 @@
 
         th {
             background: rgba(233,69,96,0.2);
-            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 10;
         }
 
         tr:hover {
             background: rgba(255,255,255,0.05);
+            cursor: pointer;
         }
 
-        .accel-values {
-            font-family: monospace;
-            font-size: 12px;
+        .status-online { color: #2ecc71; }
+        .status-offline { color: #e74c3c; }
+        .status-unknown { color: #f39c12; }
+
+        .history-section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 20px;
         }
 
-        /* 响应式 */
-        @media (max-width: 768px) {
-            .header {
-                flex-direction: column;
-                gap: 15px;
-            }
-
-            th, td {
-                padding: 8px;
-                font-size: 12px;
-            }
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
         }
 
-        /* 自动刷新指示器 */
+        .history-header h3 {
+            color: #e94560;
+        }
+
+        button {
+            background: #e94560;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            color: white;
+            cursor: pointer;
+        }
+
+        .highlight {
+            background: rgba(233,69,96,0.3);
+            transition: background 0.5s;
+        }
+
         .refresh-indicator {
             position: fixed;
             bottom: 20px;
@@ -183,6 +240,24 @@
             border-radius: 20px;
             font-size: 12px;
             font-family: monospace;
+        }
+
+        /* 最大记录提示 */
+        .max-records-tip {
+            text-align: center;
+            font-size: 12px;
+            color: #888;
+            padding: 8px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            margin-top: 10px;
+        }
+
+        .badge {
+            background: #e94560;
+            border-radius: 10px;
+            padding: 2px 8px;
+            font-size: 11px;
+            margin-left: 8px;
         }
     </style>
 </head>
@@ -205,25 +280,50 @@
     <!-- 最新报警 -->
     <div id="latestContainer"></div>
 
-    <!-- 历史记录 -->
-    <div class="history-section">
-        <h3>📋 历史报警记录</h3>
-        <div class="table-wrapper">
-            <table id="alertTable">
+    <!-- 设备管理 -->
+    <div class="device-section">
+        <div class="device-header">
+            <h3>🖥️ 设备管理 <span class="badge" id="deviceCount">0</span></h3>
+            <div class="search-box">
+                <input type="text" id="searchDeviceInput" placeholder="输入设备ID搜索">
+                <button id="searchDeviceBtn">🔍 搜索</button>
+                <button id="resetDeviceBtn">重置</button>
+            </div>
+        </div>
+        <div class="device-add">
+            <input type="text" id="newDeviceUuid" placeholder="输入设备 UUID（如：老王家）">
+            <button id="addDeviceBtn">添加设备</button>
+        </div>
+        <div class="table-container" id="deviceTableContainer">
+            <table id="deviceTable">
                 <thead>
-                <tr>
-                    <th>时间</th>
-                    <th>设备ID</th>
-                    <th>事件类型</th>
-                    <th>加速度 (X, Y, Z)</th>
-                    <th>强度</th>
-                </tr>
+                <tr><th>设备 UUID</th><th>最后心跳</th><th>最后报警</th><th>状态</th><th>操作</th></tr>
                 </thead>
-                <tbody id="alertTableBody">
-                <tr><td colspan="5" style="text-align:center">加载中...</td></tr>
-                </tbody>
+                <tbody id="deviceTableBody"></tbody>
             </table>
         </div>
+        <div class="max-records-tip" id="deviceMaxTip"></div>
+    </div>
+
+    <!-- 历史报警记录 -->
+    <div class="history-section">
+        <div class="history-header">
+            <h3>📋 历史报警记录 <span class="badge" id="alertCount">0</span></h3>
+            <div class="search-box">
+                <input type="text" id="searchAlertInput" placeholder="输入设备ID搜索">
+                <button id="searchAlertBtn">🔍 搜索</button>
+                <button id="resetAlertBtn">重置</button>
+            </div>
+        </div>
+        <div class="table-container" id="alertTableContainer">
+            <table id="alertTable">
+                <thead>
+                <tr><th>时间</th><th>设备ID</th><th>事件类型</th><th>加速度 (X, Y, Z)</th><th>强度</th></tr>
+                </thead>
+                <tbody id="alertTableBody"></tbody>
+            </table>
+        </div>
+        <div class="max-records-tip" id="alertMaxTip"></div>
     </div>
 </div>
 
@@ -232,7 +332,11 @@
 </div>
 
 <script>
-    let autoRefreshInterval = null;
+    const MAX_DISPLAY = 8;
+    let allDevices = [];
+    let allAlerts = [];
+    let currentDeviceFilter = '';
+    let currentAlertFilter = '';
 
     // 格式化时间
     function formatTime(timeStr) {
@@ -247,16 +351,160 @@
         return Math.round(mag);
     }
 
-    // 更新页面
-    function updateDashboard() {
+    // 排序设备：未知 > 离线 > 在线，同状态按最后心跳时间最新排最上面
+    function sortDevices(devices) {
+        const statusOrder = { 'unknown': 0, 'offline': 1, 'online': 2 };
+        return [...devices].sort((a, b) => {
+            // 状态排序
+            const orderA = statusOrder[a.status] !== undefined ? statusOrder[a.status] : 0;
+            const orderB = statusOrder[b.status] !== undefined ? statusOrder[b.status] : 0;
+            if (orderA !== orderB) return orderA - orderB;
+            // 同状态按最后心跳时间排序（最新的在前）
+            const timeA = a.last_heartbeat ? new Date(a.last_heartbeat).getTime() : 0;
+            const timeB = b.last_heartbeat ? new Date(b.last_heartbeat).getTime() : 0;
+            return timeB - timeA;
+        });
+    }
+
+    // 过滤设备
+    function filterDevices(devices, keyword) {
+        if (!keyword) return devices;
+        return devices.filter(d => d.device_uuid.toLowerCase().includes(keyword.toLowerCase()));
+    }
+
+    // 过滤报警记录
+    function filterAlerts(alerts, keyword) {
+        if (!keyword) return alerts;
+        return alerts.filter(a => a.device && a.device.toLowerCase().includes(keyword.toLowerCase()));
+    }
+
+    // 高亮匹配文本
+    function highlightText(text, keyword) {
+        if (!keyword || !text) return text;
+        const regex = new RegExp(`(${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        return text.replace(regex, '<mark style="background:#e94560;color:white;padding:0 4px;border-radius:4px;">$1</mark>');
+    }
+
+    // 渲染设备表格
+    function renderDevices() {
+        let filtered = filterDevices(allDevices, currentDeviceFilter);
+        const total = filtered.length;
+        const hasMore = total > MAX_DISPLAY;
+        const displayDevices = filtered.slice(0, MAX_DISPLAY);
+
+        const tbody = document.getElementById('deviceTableBody');
+        if (displayDevices.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center">暂无设备，请添加</td></tr>';
+        } else {
+            tbody.innerHTML = displayDevices.map(device => `
+                    <tr data-device-id="${device.device_uuid}">
+                        <td>${highlightText(device.device_uuid, currentDeviceFilter)}</td>
+                        <td>${device.last_heartbeat ? new Date(device.last_heartbeat).toLocaleString() : '从未'}</td>
+                        <td>${device.last_alert ? new Date(device.last_alert).toLocaleString() : '无'}</td>
+                        <td class="status-${device.status}">${device.status === 'online' ? '在线' : (device.status === 'offline' ? '离线' : '未知')}</td>
+                        <td><button onclick="removeDevice('${device.device_uuid}')">删除</button></td>
+                    </tr>
+                `).join('');
+        }
+
+        document.getElementById('deviceCount').textContent = total;
+        const tipEl = document.getElementById('deviceMaxTip');
+        if (hasMore) {
+            tipEl.innerHTML = `⚠️ 共 ${total} 个设备，仅显示最近 ${MAX_DISPLAY} 个，请使用搜索功能查找更多`;
+        } else {
+            tipEl.innerHTML = `共 ${total} 个设备`;
+        }
+    }
+
+    // 渲染报警表格
+    function renderAlerts() {
+        let filtered = filterAlerts(allAlerts, currentAlertFilter);
+        const total = filtered.length;
+        const hasMore = total > MAX_DISPLAY;
+        const displayAlerts = filtered.slice(0, MAX_DISPLAY);
+
+        const tbody = document.getElementById('alertTableBody');
+        if (displayAlerts.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center">暂无数据</td></tr>';
+        } else {
+            tbody.innerHTML = displayAlerts.map(alert => `
+                    <tr data-alert-device="${alert.device || ''}">
+                        <td>${formatTime(alert.time_str)}</td>
+                        <td>${highlightText(alert.device || 'fall_sensor', currentAlertFilter)}</td>
+                        <td>${alert.event || 'fall_detected'}</td>
+                        <td class="accel-values">(${alert.accel ? alert.accel.join(', ') : 'N/A'})</td>
+                        <td><strong>${calcMagnitude(alert.accel)}</strong></td>
+                    </tr>
+                `).join('');
+        }
+
+        document.getElementById('alertCount').textContent = total;
+        const tipEl = document.getElementById('alertMaxTip');
+        if (hasMore) {
+            tipEl.innerHTML = `⚠️ 共 ${total} 条记录，仅显示最近 ${MAX_DISPLAY} 条，请使用搜索功能查找更多`;
+        } else {
+            tipEl.innerHTML = `共 ${total} 条记录`;
+        }
+    }
+
+    // 滚动到指定设备
+    function scrollToDevice(deviceId) {
+        if (!deviceId) return;
+        // 先清除搜索，确保设备在列表中
+        if (currentDeviceFilter) {
+            currentDeviceFilter = '';
+            document.getElementById('searchDeviceInput').value = '';
+            renderDevices();
+        }
+        // 查找并滚动
+        setTimeout(() => {
+            const rows = document.querySelectorAll('#deviceTableBody tr');
+            for (let row of rows) {
+                const idCell = row.cells[0];
+                if (idCell && idCell.textContent.includes(deviceId)) {
+                    row.classList.add('highlight');
+                    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    setTimeout(() => row.classList.remove('highlight'), 2000);
+                    break;
+                }
+            }
+        }, 100);
+    }
+
+    // 滚动到指定报警记录
+    function scrollToAlert(deviceId) {
+        if (!deviceId) return;
+        if (currentAlertFilter) {
+            currentAlertFilter = '';
+            document.getElementById('searchAlertInput').value = '';
+            renderAlerts();
+        }
+        setTimeout(() => {
+            const rows = document.querySelectorAll('#alertTableBody tr');
+            for (let row of rows) {
+                const deviceCell = row.cells[1];
+                if (deviceCell && deviceCell.textContent.includes(deviceId)) {
+                    row.classList.add('highlight');
+                    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    setTimeout(() => row.classList.remove('highlight'), 2000);
+                    break;
+                }
+            }
+        }, 100);
+    }
+
+    // 加载报警数据
+    function loadAlerts() {
         fetch('/api/alerts')
             .then(res => res.json())
             .then(data => {
-                // 更新总数
-                const totalCount = document.getElementById('totalCount');
-                totalCount.textContent = data.length;
+                allAlerts = data;
+                renderAlerts();
 
-                // 更新最新报警
+                // 更新总数显示
+                document.getElementById('totalCount').textContent = data.length;
+
+                // 更新最新报警卡片
                 const latestContainer = document.getElementById('latestContainer');
                 if (data.length > 0) {
                     const latest = data[0];
@@ -282,22 +530,6 @@
                             </div>
                         `;
                 }
-
-                // 更新表格
-                const tbody = document.getElementById('alertTableBody');
-                if (data.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center">暂无数据</td></tr>';
-                } else {
-                    tbody.innerHTML = data.map(alert => `
-                            <tr>
-                                <td>${formatTime(alert.time_str)}</td>
-                                <td>${alert.device || 'fall_sensor'}</td>
-                                <td>${alert.event || 'fall_detected'}</td>
-                                <td class="accel-values">(${alert.accel ? alert.accel.join(', ') : 'N/A'})</td>
-                                <td><strong>${calcMagnitude(alert.accel)}</strong></td>
-                            </tr>
-                        `).join('');
-                }
             })
             .catch(err => {
                 console.error('获取数据失败:', err);
@@ -306,13 +538,83 @@
             });
     }
 
+    // 加载设备数据
+    function loadDevices() {
+        fetch('/api/devices')
+            .then(res => res.json())
+            .then(devices => {
+                allDevices = sortDevices(devices);
+                renderDevices();
+            })
+            .catch(err => {
+                console.error('获取设备失败:', err);
+            });
+    }
+
+    // 添加设备
+    function addDevice() {
+        const uuid = document.getElementById('newDeviceUuid').value.trim();
+        if (!uuid) {
+            alert('请输入设备 UUID');
+            return;
+        }
+
+        // 前端检查是否已存在
+        const exists = allDevices.some(device => device.device_uuid === uuid);
+        if (exists) {
+            alert(`设备 "${uuid}" 已存在，请勿重复添加！`);
+            return;
+        }
+
+        fetch('/api/device/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uuid: uuid })
+        })
+            .then(async res => {
+                if (res.status === 409) {
+                    const data = await res.json();
+                    alert(data.message || `设备 "${uuid}" 已存在！`);
+                    throw new Error('duplicate');
+                }
+                if (!res.ok) {
+                    throw new Error('添加失败');
+                }
+                return res.json();
+            })
+            .then(() => {
+                document.getElementById('newDeviceUuid').value = '';
+                loadDevices();
+                alert(`设备 "${uuid}" 添加成功！`);
+            })
+            .catch(err => {
+                if (err.message !== 'duplicate') {
+                    alert('添加失败: ' + err.message);
+                }
+            });
+    }
+
+    // 删除设备
+    function removeDevice(uuid) {
+        if (confirm(`确定要删除设备 ${uuid} 吗？`)) {
+            fetch('/api/device/remove', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ uuid: uuid })
+            }).then(() => {
+                loadDevices();
+            }).catch(err => {
+                alert('删除失败: ' + err.message);
+            });
+        }
+    }
+
     // 清空所有报警
     function clearAlerts() {
         if (confirm('确定要清空所有报警记录吗？')) {
             fetch('/api/clear', { method: 'POST' })
-                .then(res => res.json())
                 .then(() => {
-                    updateDashboard();
+                    loadAlerts();
                 })
                 .catch(err => {
                     console.error('清空失败:', err);
@@ -321,19 +623,62 @@
         }
     }
 
+    // 搜索设备
+    function searchDevice() {
+        currentDeviceFilter = document.getElementById('searchDeviceInput').value.trim();
+        renderDevices();
+    }
+
+    // 重置设备搜索
+    function resetDeviceSearch() {
+        currentDeviceFilter = '';
+        document.getElementById('searchDeviceInput').value = '';
+        renderDevices();
+    }
+
+    // 搜索报警
+    function searchAlert() {
+        currentAlertFilter = document.getElementById('searchAlertInput').value.trim();
+        renderAlerts();
+    }
+
+    // 重置报警搜索
+    function resetAlertSearch() {
+        currentAlertFilter = '';
+        document.getElementById('searchAlertInput').value = '';
+        renderAlerts();
+    }
+
     // 启动自动刷新
+    let autoRefreshInterval = null;
     function startAutoRefresh() {
         if (autoRefreshInterval) clearInterval(autoRefreshInterval);
-        autoRefreshInterval = setInterval(updateDashboard, 3000);
+        autoRefreshInterval = setInterval(() => {
+            loadAlerts();
+            loadDevices();
+        }, 3000);
     }
 
     // 初始化
     document.addEventListener('DOMContentLoaded', () => {
-        updateDashboard();
+        loadAlerts();
+        loadDevices();
         startAutoRefresh();
 
-        // 绑定清空按钮
+        document.getElementById('addDeviceBtn').addEventListener('click', addDevice);
         document.getElementById('clearBtn').addEventListener('click', clearAlerts);
+        document.getElementById('searchDeviceBtn').addEventListener('click', searchDevice);
+        document.getElementById('resetDeviceBtn').addEventListener('click', resetDeviceSearch);
+        document.getElementById('searchAlertBtn').addEventListener('click', searchAlert);
+        document.getElementById('resetAlertBtn').addEventListener('click', resetAlertSearch);
+
+        // 回车搜索
+        document.getElementById('searchDeviceInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') searchDevice();
+        });
+        document.getElementById('searchAlertInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') searchAlert();
+        });
     });
 </script>
 </body>
