@@ -1,61 +1,92 @@
 /*
- * 项目二：钥匙扣（广播端）
- * 功能：持续广播BLE信号，超低功耗
- * 硬件：ESP32-C3 + CR2032纽扣电池
- * 
- * 使用说明：
- * 1. 每个钥匙扣修改 KEYFOB_ID 为唯一编号（如 001, 002）
- * 2. 广播名称格式：KEYFOB_001
- * 3. 桩子通过前缀 "KEYFOB_" 识别
+ * 项目二：钥匙扣（超低功耗广播版）
+ * 功能：每隔一段时间广播一次，其余时间深度睡眠
+ * 硬件：ESP32-C3 + 纽扣电池
  */
 
 #include <ArduinoBLE.h>
+#include <esp_sleep.h>
 
 // ========== 钥匙扣配置 ==========
-#define KEYFOB_ID "001"                    // 每个钥匙扣唯一编号，可以在后续对每个唯一名字做映射，对应具体是哪家的谁
-const char* KEYFOB_NAME = "KEYFOB_" KEYFOB_ID;  // 广播名称：KEYFOB_001
+#define KEYFOB_ID "001"
+const char* KEYFOB_NAME = "KEYFOB_" KEYFOB_ID;
 
-// ========== LED 引脚（做演示使用，实际发行要去掉这些东西，不必然对功耗有影响）==========
+// 功耗优化参数
+const unsigned long SLEEP_INTERVAL_SEC = 8;   // 睡眠间隔（秒）
+const unsigned long BROADCAST_DURATION_MS = 100; // 广播持续时间（毫秒）
+
 const int ledPin = 8;
+unsigned long broadcastCount = 0;
 
-void setup() {
-  // 可选：调试用串口（正式使用时可以注释掉以省电）
-  Serial.begin(115200);
-  
-  pinMode(ledPin, OUTPUT);
-  
+// ========== 执行单次广播 ==========
+void doOneBroadcast() {
   // 初始化 BLE
   if (!BLE.begin()) {
-    Serial.println("初始化BLE失败");
+    Serial.println("BLE 初始化失败");
     return;
   }
-  Serial.println("初始化BLE成功");
-  // 设置广播名称（桩子通过此前缀识别）
+  
+  // 设置设备名称
   BLE.setLocalName(KEYFOB_NAME);
   
-  // 设置广播数据（不需要服务和特征值，纯广播即可）
-  // 这样功耗最低
+  // 开始广播
   BLE.advertise();
   
-  // 启动提示：快闪2次，启动提示，万一没电了好知道
+  Serial.print("广播名称: ");
+  Serial.println(KEYFOB_NAME);
+  
+  // 广播一段时间
+  delay(BROADCAST_DURATION_MS);
+  
+  // 注意：不要调用 BLE.end()，直接进入睡眠
+  // 外设会在深度睡眠时自动断电
+}
+
+// ========== 进入深度睡眠 ==========
+void goToDeepSleep() {
+  // 短暂延迟确保所有操作完成
+  delay(10);
+  
+  // 设置定时器唤醒
+  esp_sleep_enable_timer_wakeup(SLEEP_INTERVAL_SEC * 1000000ULL);
+  
+  // 进入深度睡眠
+  esp_deep_sleep_start();
+}
+
+// ========== 主程序 ==========
+void setup() {
+  Serial.begin(115200);
+  delay(100);
+  
+  // LED 指示
+  pinMode(ledPin, OUTPUT);
   for (int i = 0; i < 2; i++) {
     digitalWrite(ledPin, HIGH);
     delay(50);
     digitalWrite(ledPin, LOW);
     delay(50);
   }
-  Serial.println("启动配置结束，准备循环");
-}
- 
-void loop() {
-  // 为了让 LED 偶尔闪烁指示工作状态（会增加功耗，后续可以去掉）
-  static unsigned long lastBlink = 0;
-  if (millis() - lastBlink > 30000) {  // 每30秒闪一次
-    digitalWrite(ledPin, HIGH);
-    delay(10);
-    digitalWrite(ledPin, LOW);
-    lastBlink = millis();
-  }
   
-  delay(1000);
+  Serial.println("=== 钥匙扣启动 ===");
+  Serial.print("广播间隔: ");
+  Serial.print(SLEEP_INTERVAL_SEC);
+  Serial.println(" 秒");
+  
+  // 执行广播
+  doOneBroadcast();
+  
+  broadcastCount++;
+  Serial.print("广播 #");
+  Serial.print(broadcastCount);
+  Serial.print(" 完成，睡眠 ");
+  Serial.print(SLEEP_INTERVAL_SEC);
+  Serial.println(" 秒");
+  
+  // 进入深度睡眠
+  goToDeepSleep();
+}
+
+void loop() {
+  // 不会执行到这里
 }
